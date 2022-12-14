@@ -15,6 +15,17 @@
  * - <TOPIC>/humidity/EUI48:11:22:33:44:55:66 value
  * - ...
  *
+ * This fits reasonably well with this topic layout:
+ * > All MQTT clients using the Sparkplug specification will use the
+ * > following Topic Namespace structure:
+ * >   namespace/group_id/message_type/edge_node_id/[device_id]
+ * In our case, that would be:
+ * - <namespace/location>/temperature//device_id (we skip the edge_node_id)
+ *
+ * For now, we're not bothered that the messages may not arrive in a
+ * single batch. If we want to align the values, we'll round to the
+ * nearest time when storing.
+ *
  * Configuration goes in arduino_secrets.h
  */
 #define DHT_VERSION 22  // for DHT-22
