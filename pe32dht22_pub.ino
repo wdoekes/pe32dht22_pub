@@ -44,6 +44,7 @@
 #include <TinyMqtt.h>  // ^click: http://librarymanager/All#TinyMqtt
 
 #include "arduino_secrets.h"
+#include "build_version.h"
 
 #ifndef ESP32
 #pragma message(THIS EXAMPLE IS FOR ESP32 ONLY !)
@@ -84,6 +85,9 @@ void initSerial() {
   Serial.begin(115200);
   delay(200);  // wait a bit to avoid start/restart spam
   Serial << "DHT11/22 ESP32 example with tasks [" << guid << "]\r\n";
+  Serial << "  GIT_VERSION = " GIT_VERSION << "\r\n";
+  Serial << "  BUILD_HOST = " BUILD_HOST << "\r\n";
+  Serial << "  BUILD_TIME = " BUILD_TIME << "\r\n";
 }
 
 void initWifi() {
@@ -217,6 +221,8 @@ bool getTemperature() {
   sendMqtt("dewpoint", String(dewPoint));
   sendMqtt("comfortidx", String(cr));
   sendMqtt("comfort", getComfortStatusString(cf));
+  sendMqtt("buildversion", GIT_VERSION);
+  sendMqtt("buildtime", BUILD_TIME);
 #endif
 
   return true;
