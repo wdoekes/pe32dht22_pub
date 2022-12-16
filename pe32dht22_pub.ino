@@ -30,6 +30,7 @@
  */
 #define DHT_VERSION 22  // for DHT-22
 #define DHT_PIN 17      // DHT sensor data pin GPIO-17
+#define GLOBAL_RESET_TIME 300 // reboot device if no publish for X seconds
 
 // ESP32 libraries: http://boardsmanager/All#esp32
 #include <Ticker.h>
@@ -76,6 +77,8 @@ TaskHandle_t tempTaskHandle = NULL;
 Ticker tempTicker;
 const int dhtPin = DHT_PIN;
 
+unsigned long lastMqtt;
+
 void initGuid() {
   strncpy(guid, "EUI48:", 6);
   strncpy(guid + 6, WiFi.macAddress().c_str(), sizeof(guid) - (6 + 1));
@@ -109,7 +112,10 @@ void initMqtt() {
   MqttClient.connect(SECRET_MQTT_BROKER, SECRET_MQTT_PORT);
   if (!MqttClient.connected()) {
     Serial << "NOT CONNECTED!\r\n";
+  } else {
+    sendMqtt("bootlog", "initMqtt");
   }
+  lastMqtt = millis();
 }
 
 void sendMqtt(String subtopic, String value) {
@@ -120,6 +126,7 @@ void sendMqtt(String subtopic, String value) {
     topic += "/";
     topic += guid;
     MqttClient.publish(topic.c_str(), value);
+    lastMqtt = millis();
   }
 }
 
@@ -256,15 +263,18 @@ void setup() {
 }
 
 void loop() {
+  if (WiFi.status() != WL_CONNECTED) {
+    WiFiMulti.run();
+    MqttClient.loop();
+    sendMqtt("bootlog", "wifi_was_down");
+  }
+
   MqttClient.loop();
 
-#if 0
-  static long int next_send = millis();
-  if (millis() >= next_send) {
-    sendMqtt("test", String(123));
-    next_send += 5 * 1000;
+  if ((millis() - lastMqtt) > GLOBAL_RESET_TIME*1000) {
+    sendMqtt("bootlog", AS_CSTR(GLOBAL_RESET_TIME) "s_no_talking");
+    ESP.restart();
   }
-#endif
 
   // TODO: esp32 pthread_cond_wait here? And then do stuff with the values from the bg job..
   yield();
