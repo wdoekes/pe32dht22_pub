@@ -27,6 +27,13 @@
  * nearest time when storing.
  *
  * Configuration goes in arduino_secrets.h
+ *
+ * TODO:
+ * - right now, the dead mans switch (GLOBAL_RESET_TIME) does the
+ *   reconnect after mqtt has been restarted (proper tcp-fin teardown);
+ *   should be (likely fixed by this commit?)
+ * - right now, it pushes the temperature message in a first tcp packet and
+ *   then the rest in a second one (maybe we can delay the first one?)
  */
 #define DHT_VERSION 22  // for DHT-22
 #define DHT_PIN 17      // DHT sensor data pin GPIO-17
@@ -87,7 +94,7 @@ void initGuid() {
 void initSerial() {
   Serial.begin(115200);
   delay(200);  // wait a bit to avoid start/restart spam
-  Serial << "DHT11/22 ESP32 example with tasks [" << guid << "]\r\n";
+  Serial << "\x1b[0;32mDHT11/22 ESP32 example with tasks [" << guid << "]\x1b[0m\r\n";
   Serial << "  GIT_VERSION = " GIT_VERSION << "\r\n";
   Serial << "  BUILD_HOST = " BUILD_HOST << "\r\n";
   Serial << "  BUILD_TIME = " BUILD_TIME << "\r\n";
@@ -95,27 +102,10 @@ void initSerial() {
 
 void initWifi() {
   WiFiMulti.addAP(SECRET_WIFI_SSID, SECRET_WIFI_PASS);
-
-  Serial << "Waiting for WiFi " << SECRET_WIFI_SSID << "...";
-  while (WiFiMulti.run() != WL_CONNECTED) {
-    Serial << ".";
-    delay(500);
-  }
-  Serial << "\r\n";
-
-  Serial << "WiFi connected, local-IP " << WiFi.localIP().toString() << "\r\n";
 }
 
 void initMqtt() {
-  Serial << "Connecting to MQTT at " SECRET_MQTT_BROKER "\r\n";
   MqttClient.id(guid);
-  MqttClient.connect(SECRET_MQTT_BROKER, SECRET_MQTT_PORT);
-  if (!MqttClient.connected()) {
-    Serial << "NOT CONNECTED!\r\n";
-  } else {
-    sendMqtt("bootlog", "initMqtt");
-  }
-  lastMqtt = millis();
 }
 
 void sendMqtt(String subtopic, String value) {
@@ -263,14 +253,44 @@ void setup() {
 }
 
 void loop() {
+  static bool firstRun = true;
+  String bootlog;
+
+  if (firstRun) {
+    firstRun = false;
+    lastMqtt = millis();
+    bootlog += "initial_run ";
+  }
   if (WiFi.status() != WL_CONNECTED) {
-    WiFiMulti.run();
-    MqttClient.loop();
-    sendMqtt("bootlog", "wifi_was_down");
+    bootlog += "wifi_was_down ";
+    Serial << "Waiting for WiFi " << SECRET_WIFI_SSID << "...";
+    WiFiMulti.run(15000);
+    if (WiFi.status() == WL_CONNECTED) {
+      Serial << "WiFi connected, local-IP " << WiFi.localIP().toString() << "\r\n";
+      bootlog += "wifi_connected ";
+    } else {
+      Serial << "(not connected yet)\r\n";
+    }
+  }
+  if (WiFi.status() == WL_CONNECTED && !MqttClient.connected()) {
+    bootlog += "mqtt_was_down ";
+    Serial << "Connecting to MQTT at " SECRET_MQTT_BROKER "\r\n";
+    MqttClient.connect(SECRET_MQTT_BROKER, SECRET_MQTT_PORT);
+    if (MqttClient.connected()) {
+      bootlog += "mqtt_connected ";
+      Serial << "Connected to MQTT\r\n";
+    } else {
+      Serial << "(not connected yet)\r\n";
+    }
+  }
+  if(!bootlog.isEmpty()) {
+    sendMqtt("bootlog", bootlog);
   }
 
+  // Manual keepalives, but not reconnects
   MqttClient.loop();
 
+  // Dead mans switch
   if ((millis() - lastMqtt) > GLOBAL_RESET_TIME*1000) {
     sendMqtt("bootlog", AS_CSTR(GLOBAL_RESET_TIME) "s_no_talking");
     ESP.restart();
