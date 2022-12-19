@@ -84,8 +84,15 @@ MqttClient MqttClient;
 DHTesp dht;
 
 // https://circuitdigest.com/microcontroller-projects/interfacing-mq135-gas-sensor-with-arduino-to-measure-co2-levels-in-ppm
-const float RZERO = 5.0;
-const float RLOAD = 1.0; // on-board resistor = 1kOhm
+// https://github.com/tricoos/m135-lua#calibration-and-burn-in
+/*
+What are safe levels of CO2 in rooms?
+- 250-400ppm	Normal background concentration in outdoor ambient air
+- 400-1,000ppm	Concentrations typical of occupied indoor spaces with good air exchange
+- 1,000-2,000ppm	Complaints of drowsiness and poor air.
+*/
+const float RZERO = 4.82;
+const float RLOAD = 10.0; // on-board resistor = 10kOhm ??
 MQ135 mq135(PIN_MQ135, RZERO, RLOAD);
 
 TaskHandle_t tempTaskHandle = NULL;
@@ -95,6 +102,10 @@ const int dhtPin = DHT_PIN;
 unsigned long lastMqtt;
 float lastTemperature;
 float lastHumidity;
+
+float lastRzero = RZERO;
+float lastRawPpm = 420;
+float lastCorrPpm = 420;
 
 void initGuid() {
   strncpy(guid, "EUI48:", 6);
@@ -234,6 +245,10 @@ bool getTemperature() {
   sendMqtt("comfort", getComfortStatusString(cf));
   sendMqtt("buildversion", GIT_VERSION);
   sendMqtt("buildtime", BUILD_TIME);
+
+  sendMqtt("mq135rzero", String(lastRzero));
+  sendMqtt("mq135rawppm", String(lastRawPpm));
+  sendMqtt("mq135corrppm", String(lastCorrPpm));
 #endif
 
   return true;
@@ -279,6 +294,10 @@ void loopGasSensor(float temperature, float humidity) {
   Serial.print("\t Corrected PPM: ");
   Serial.print(correctedPPM);
   Serial.println("ppm");
+
+  lastRzero = ((7 * lastRzero) + rzero) / 8;
+  lastRawPpm = ((7 * lastRawPpm) + ppm) / 8;
+  lastCorrPpm = ((7 * lastCorrPpm) + correctedPPM) / 8;
 }
 
 void setup() {
