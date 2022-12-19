@@ -38,6 +38,7 @@
 #define DHT_VERSION 22  // for DHT-22
 #define DHT_PIN 17      // DHT sensor data pin GPIO-17
 #define GLOBAL_RESET_TIME 300 // reboot device if no publish for X seconds
+#define PIN_MQ135 32 // GPIO32, ADC1_CH4 (cannot use ADC2 because of WiFi)
 
 // ESP32 libraries: http://boardsmanager/All#esp32
 #include <Ticker.h>
@@ -50,6 +51,8 @@
 #include <TinyStreaming.h>  // ^click: http://librarymanager/All#TinyConsole
 // MQTT
 #include <TinyMqtt.h>  // ^click: http://librarymanager/All#TinyMqtt
+
+#include <MQ135.h>
 
 #include "arduino_secrets.h"
 #include "build_version.h"
@@ -80,11 +83,18 @@ MqttClient MqttClient;
 
 DHTesp dht;
 
+// https://circuitdigest.com/microcontroller-projects/interfacing-mq135-gas-sensor-with-arduino-to-measure-co2-levels-in-ppm
+const float RZERO = 5.0;
+const float RLOAD = 1.0; // on-board resistor = 1kOhm
+MQ135 mq135(PIN_MQ135, RZERO, RLOAD);
+
 TaskHandle_t tempTaskHandle = NULL;
 Ticker tempTicker;
 const int dhtPin = DHT_PIN;
 
 unsigned long lastMqtt;
+float lastTemperature;
+float lastHumidity;
 
 void initGuid() {
   strncpy(guid, "EUI48:", 6);
@@ -202,6 +212,10 @@ bool getTemperature() {
   float dewPoint = dht.computeDewPoint(newValues.temperature, newValues.humidity);
   float cr = dht.getComfortRatio(cf, newValues.temperature, newValues.humidity);
 
+  // Set globals
+  lastTemperature = newValues.temperature;
+  lastHumidity = newValues.humidity;
+
   // FIXME: Surely we cannot do serial print unsynchronised from a subtasks.. can we?
   Serial <<
     " T:" << newValues.temperature <<
@@ -240,6 +254,33 @@ const char* getComfortStatusString(ComfortState cf) {
   }
 }
 
+void loopGasSensor(float temperature, float humidity) {
+  static unsigned long nextGasSensorRun = 0;
+  unsigned long now = millis();
+  if (nextGasSensorRun > now) {
+    return;
+  }
+  nextGasSensorRun = now + 10*1000; // next in 10s
+
+  float rzero = mq135.getRZero();
+  float correctedRZero = mq135.getCorrectedRZero(temperature, humidity);
+  float resistance = mq135.getResistance();
+  float ppm = mq135.getPPM();
+  float correctedPPM = mq135.getCorrectedPPM(temperature, humidity);
+
+  Serial.print("MQ135 RZero: ");
+  Serial.print(rzero);
+  Serial.print("\t Corrected RZero: ");
+  Serial.print(correctedRZero);
+  Serial.print("\t Resistance: ");
+  Serial.print(resistance);
+  Serial.print("\t PPM: ");
+  Serial.print(ppm);
+  Serial.print("\t Corrected PPM: ");
+  Serial.print(correctedPPM);
+  Serial.println("ppm");
+}
+
 void setup() {
   // Setup
   initGuid();
@@ -250,6 +291,9 @@ void setup() {
   // Init task and schedule for forever
   initTemperatureTask();
   Serial << "\r\n";
+
+  lastTemperature = 20.0;
+  lastHumidity = 25.0;
 }
 
 void loop() {
@@ -295,6 +339,8 @@ void loop() {
     sendMqtt("bootlog", AS_CSTR(GLOBAL_RESET_TIME) "s_no_talking");
     ESP.restart();
   }
+
+  loopGasSensor(lastTemperature, lastHumidity);
 
   // TODO: esp32 pthread_cond_wait here? And then do stuff with the values from the bg job..
   yield();
