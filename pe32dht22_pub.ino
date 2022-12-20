@@ -91,7 +91,7 @@ What are safe levels of CO2 in rooms?
 - 400-1,000ppm	Concentrations typical of occupied indoor spaces with good air exchange
 - 1,000-2,000ppm	Complaints of drowsiness and poor air.
 */
-const float RZERO = 4.82;
+const float RZERO = 5.25;
 const float RLOAD = 10.0; // on-board resistor = 10kOhm ??
 MQ135 mq135(PIN_MQ135, RZERO, RLOAD);
 
@@ -246,9 +246,11 @@ bool getTemperature() {
   sendMqtt("buildversion", GIT_VERSION);
   sendMqtt("buildtime", BUILD_TIME);
 
-  sendMqtt("mq135rzero", String(lastRzero));
-  sendMqtt("mq135rawppm", String(lastRawPpm));
-  sendMqtt("mq135corrppm", String(lastCorrPpm));
+  if (lastRzero > 0) {
+    sendMqtt("mq135rzero", String(lastRzero));
+    sendMqtt("mq135rawppm", String(lastRawPpm));
+    sendMqtt("mq135corrppm", String(lastCorrPpm));
+  }
 #endif
 
   return true;
@@ -283,21 +285,27 @@ void loopGasSensor(float temperature, float humidity) {
   float ppm = mq135.getPPM();
   float correctedPPM = mq135.getCorrectedPPM(temperature, humidity);
 
-  Serial.print("MQ135 RZero: ");
-  Serial.print(rzero);
-  Serial.print("\t Corrected RZero: ");
-  Serial.print(correctedRZero);
-  Serial.print("\t Resistance: ");
-  Serial.print(resistance);
-  Serial.print("\t PPM: ");
-  Serial.print(ppm);
-  Serial.print("\t Corrected PPM: ");
-  Serial.print(correctedPPM);
-  Serial.println("ppm");
+  if (rzero >= 0.1 && rzero < (2 * RZERO) &&
+        ppm >= 100 && ppm < 8000 &&
+        correctedPPM >= 100 && correctedPPM < 8000) {
+    if (lastRzero > 0) {
+      lastRzero = ((7 * lastRzero) + rzero) / 8;
+    } else {
+      lastRzero = rzero;
+    }
+    lastRawPpm = ((7 * lastRawPpm) + ppm) / 8;
+    lastCorrPpm = ((7 * lastCorrPpm) + correctedPPM) / 8;
+  } else {
+    lastRzero = 0; // don't even publish this
+  }
 
-  lastRzero = ((7 * lastRzero) + rzero) / 8;
-  lastRawPpm = ((7 * lastRawPpm) + ppm) / 8;
-  lastCorrPpm = ((7 * lastCorrPpm) + correctedPPM) / 8;
+  if (lastRzero != 0) {
+    Serial << "MQ135 RZero: " << rzero <<
+      "\tCorrected RZero: " << correctedRZero <<
+      "\tResistance: " << resistance <<
+      "\tPPM: " << ppm <<
+      "\tCorrected PPM: " << correctedPPM << "\r\n";
+  }
 }
 
 void setup() {
@@ -317,6 +325,7 @@ void setup() {
 
 void loop() {
   static bool firstRun = true;
+  static unsigned long wifiRetry = 0;
   String bootlog;
 
   if (firstRun) {
@@ -324,10 +333,11 @@ void loop() {
     lastMqtt = millis();
     bootlog += "initial_run ";
   }
-  if (WiFi.status() != WL_CONNECTED) {
+  if (WiFi.status() != WL_CONNECTED && (millis() - wifiRetry) > 2000) {
     bootlog += "wifi_was_down ";
-    Serial << "Waiting for WiFi " << SECRET_WIFI_SSID << "...";
+    Serial << "Waiting for WiFi " << SECRET_WIFI_SSID << "\r\n";
     WiFiMulti.run(15000);
+    wifiRetry = millis();
     if (WiFi.status() == WL_CONNECTED) {
       Serial << "WiFi connected, local-IP " << WiFi.localIP().toString() << "\r\n";
       bootlog += "wifi_connected ";
