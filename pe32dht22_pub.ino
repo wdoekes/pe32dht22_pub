@@ -73,6 +73,56 @@
 #define EXPAND_VALUE_THEN_AS_CSTR(EXP) #EXP
 #define AS_CSTR(EXP) EXPAND_VALUE_THEN_AS_CSTR(EXP)
 
+// https://github.com/GeorgK/MQ135/pull/3/files <-- see useful stuff here??
+class MQ135ESP32 : public MQ135 {
+  private:
+    uint8_t _pin;
+    float _rload; // The load resistance on the board in kOhm
+    float _rzero; // Calibration resistance at atmospheric CO2 level
+    unsigned long _serve_cache_until;
+    float _last_cache_value;
+
+  public:
+    MQ135ESP32(uint8_t pin, float rzero=76.63, float rload=10.0) : MQ135(pin, rzero, rload) {
+      _pin = pin;
+      _rzero = rzero;
+      _rload = rload;
+      _serve_cache_until = millis();
+      _last_cache_value = 0;
+    }
+    #if 0
+    virtual float getCorrectionFactor(float t, float h) {
+      // This formula is reduced from temperature and humidity dependency graph,
+      // found in this datasheet:
+      // http://china-total.com/Product/meter/gas-sensor/MQ135.pdf
+      return (1.30732 - 0.0116044 * t) * (2.20591 - 0.296456 * log(h));
+    }
+    #endif
+    // XXX: BEWARE: the base class needs to have virtual (too)!!
+    virtual float getResistance() {
+      // The base class calls getResistance multiple times, not really convenient
+      if (millis() < _serve_cache_until) {
+        return _last_cache_value;
+      }
+
+      // Analog read a bunch of times and take the average
+      unsigned int val;
+      const unsigned int loops = 10;
+      for (unsigned int i = 0; i < loops; ++i) {
+        uint16_t one_reading = analogRead(_pin);
+        //Serial << "DEBUG: " << one_reading << "\r\n";
+        val += one_reading;
+        delay(50);
+      }
+      val /= loops;
+
+      // Need to override on ESP32 because of 12 bits ADC, not 10 bits.
+      _last_cache_value = ((4095./(float)val) - 1.)*_rload;
+      _serve_cache_until = millis() + 1000;
+      return _last_cache_value;
+    }
+};
+
 /* We use the guid to store something unique to identify the device by.
  * For now, we'll populate it with the ESP Wifi MAC address,
  * if available. */
@@ -85,15 +135,16 @@ DHTesp dht;
 
 // https://circuitdigest.com/microcontroller-projects/interfacing-mq135-gas-sensor-with-arduino-to-measure-co2-levels-in-ppm
 // https://github.com/tricoos/m135-lua#calibration-and-burn-in
+// https://www.codrey.com/electronic-circuits/how-to-use-mq-135-gas-sensor/ <-- IMPORTANT
 /*
 What are safe levels of CO2 in rooms?
 - 250-400ppm	Normal background concentration in outdoor ambient air
 - 400-1,000ppm	Concentrations typical of occupied indoor spaces with good air exchange
 - 1,000-2,000ppm	Complaints of drowsiness and poor air.
 */
-const float RZERO = 5.25;
-const float RLOAD = 10.0; // on-board resistor = 10kOhm ??
-MQ135 mq135(PIN_MQ135, RZERO, RLOAD);
+const float RZERO = 535;
+const float RLOAD = 75.0; // on-board resistor = 75kOhm (753 component)
+MQ135ESP32 mq135(PIN_MQ135, RZERO, RLOAD);
 
 TaskHandle_t tempTaskHandle = NULL;
 Ticker tempTicker;
@@ -297,6 +348,7 @@ void loopGasSensor(float temperature, float humidity) {
     lastCorrPpm = ((7 * lastCorrPpm) + correctedPPM) / 8;
   } else {
     lastRzero = 0; // don't even publish this
+    Serial << "DEBUG: got rzero of " << rzero << "\r\n";
   }
 
   if (lastRzero != 0) {
