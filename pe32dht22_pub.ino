@@ -154,6 +154,7 @@ unsigned long lastMqtt;
 float lastTemperature;
 float lastHumidity;
 
+int hasRzero;
 float lastRzero = RZERO;
 float lastRawPpm = 420;
 float lastCorrPpm = 420;
@@ -337,8 +338,8 @@ void loopGasSensor(float temperature, float humidity) {
   float correctedPPM = mq135.getCorrectedPPM(temperature, humidity);
 
   if (rzero >= 0.1 && rzero < (2 * RZERO) &&
-        ppm >= 100 && ppm < 8000 &&
-        correctedPPM >= 100 && correctedPPM < 8000) {
+        ppm >= 250 && ppm < 8000 &&
+        correctedPPM >= 250 && correctedPPM < 8000) {
     if (lastRzero > 0) {
       lastRzero = ((7 * lastRzero) + rzero) / 8;
     } else {
@@ -346,9 +347,16 @@ void loopGasSensor(float temperature, float humidity) {
     }
     lastRawPpm = ((7 * lastRawPpm) + ppm) / 8;
     lastCorrPpm = ((7 * lastCorrPpm) + correctedPPM) / 8;
+    hasRzero = 1;
   } else {
     lastRzero = 0; // don't even publish this
-    Serial << "DEBUG: got rzero of " << rzero << "\r\n";
+    Serial << "DEBUG: got rzero of " << rzero << " and ppm " << ppm << " (#" << hasRzero << ")\r\n";
+    if (hasRzero < 0) {
+      hasRzero += 1; // lastly it will be 0, and we'll stop querying
+      if (hasRzero == 0) {
+        Serial << "INFO: disabling loopGasSensor\r\n";
+      }
+    }
   }
 
   if (lastRzero != 0) {
@@ -373,6 +381,7 @@ void setup() {
 
   lastTemperature = 20.0;
   lastHumidity = 25.0;
+  hasRzero = -10;
 }
 
 void loop() {
@@ -421,7 +430,9 @@ void loop() {
     ESP.restart();
   }
 
-  loopGasSensor(lastTemperature, lastHumidity);
+  if (hasRzero != 0) {
+    loopGasSensor(lastTemperature, lastHumidity);
+  }
 
   // TODO: esp32 pthread_cond_wait here? And then do stuff with the values from the bg job..
   yield();
